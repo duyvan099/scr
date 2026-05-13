@@ -1,0 +1,400 @@
+-- [[ DTOAN ULTIMATE HUB - FULL INTEGRATED ]] --
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local CoreGui = game:GetService("CoreGui")
+local Workspace = game:GetService("Workspace")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+-- Xóa bản cũ nếu đang chạy
+if CoreGui:FindFirstChild("Dtoan") then 
+    CoreGui.Dtoan:Destroy() 
+end
+
+-- Khởi tạo ScreenGui
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "Dtoan"
+ScreenGui.Parent = CoreGui
+ScreenGui.ResetOnSpawn = false
+
+-- Biến hệ thống cũ
+local checkpoints = {}
+local autoRespawnEnabled = true
+local lastSavedPos = nil
+local targetPlayer = nil
+local isFollowing = false
+
+-- Biến hệ thống Bring Parts mới
+local blackHoleActive = false
+local bringTarget = nil
+local DescendantAddedConnection
+
+local Settings = {
+    Box = false, Line = false, Health = false, Name = false, Teleport = false,
+    WhiteColor = Color3.fromRGB(255, 255, 255),
+}
+
+-- [ SETUP NETWORK CHO BRING PARTS ]
+local BringFolder = Instance.new("Folder", Workspace)
+local BringPart = Instance.new("Part", BringFolder)
+local Attachment1 = Instance.new("Attachment", BringPart)
+BringPart.Anchored = true
+BringPart.CanCollide = false
+BringPart.Transparency = 1
+
+if not getgenv().Network then
+    getgenv().Network = {
+        BaseParts = {},
+        Velocity = Vector3.new(14.46262424, 14.46262424, 14.46262424)
+    }
+    local function EnablePartControl()
+        LocalPlayer.ReplicationFocus = Workspace
+        RunService.Heartbeat:Connect(function()
+            sethiddenproperty(LocalPlayer, "SimulationRadius", math.huge)
+            for _, p in pairs(getgenv().Network.BaseParts) do
+                if p:IsDescendantOf(Workspace) then p.Velocity = getgenv().Network.Velocity end
+            end
+        end)
+    end
+    EnablePartControl()
+end
+
+local function ForcePart(v)
+    if v:IsA("BasePart") and not v.Anchored and not v.Parent:FindFirstChildOfClass("Humanoid") and not v.Parent:FindFirstChild("Head") and v.Name ~= "Handle" then
+        for _, x in ipairs(v:GetChildren()) do
+            if x:IsA("BodyMover") or x:IsA("RocketPropulsion") then x:Destroy() end
+        end
+        if v:FindFirstChild("Attachment") then v:FindFirstChild("Attachment"):Destroy() end
+        if v:FindFirstChild("AlignPosition") then v:FindFirstChild("AlignPosition"):Destroy() end
+        if v:FindFirstChild("Torque") then v:FindFirstChild("Torque"):Destroy() end
+        
+        v.CanCollide = false
+        local Torque = Instance.new("Torque", v)
+        Torque.Torque = Vector3.new(100000, 100000, 100000)
+        local AlignPosition = Instance.new("AlignPosition", v)
+        local Attachment2 = Instance.new("Attachment", v)
+        Torque.Attachment0 = Attachment2
+        AlignPosition.MaxForce = math.huge
+        AlignPosition.MaxVelocity = math.huge
+        AlignPosition.Responsiveness = 200
+        AlignPosition.Attachment0 = Attachment2
+        AlignPosition.Attachment1 = Attachment1
+    end
+end
+
+-- [ HỆ THỐNG ESP CŨ ]
+local function CreateESP(player)
+    local Objects = {
+        Box = Drawing.new("Square"), Tracer = Drawing.new("Line"),
+        HealthBar = Drawing.new("Line"), NameTag = Drawing.new("Text"), TeleBtn = Drawing.new("Text")
+    }
+    Objects.Box.Color = Settings.WhiteColor; Objects.Tracer.Color = Settings.WhiteColor
+    Objects.NameTag.Color = Settings.WhiteColor; Objects.HealthBar.Color = Color3.fromRGB(0, 255, 0)
+    Objects.TeleBtn.Color = Color3.fromRGB(0, 255, 255)
+    Objects.Box.Thickness = 1; Objects.Box.Filled = false; Objects.Tracer.Thickness = 1
+    Objects.HealthBar.Thickness = 2
+    Objects.NameTag.Center = true; Objects.NameTag.Outline = true; Objects.NameTag.Size = 16
+    Objects.TeleBtn.Text = "[ TELE ]"; Objects.TeleBtn.Size = 18; Objects.TeleBtn.Center = true; Objects.TeleBtn.Outline = true
+
+    local Connection
+    Connection = RunService.RenderStepped:Connect(function()
+        if not player or not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
+            for _, obj in pairs(Objects) do obj.Visible = false end
+            if not player then Connection:Disconnect() end
+            return
+        end
+        local RootPart = player.Character.HumanoidRootPart
+        local Pos, OnScreen = Camera:WorldToViewportPoint(RootPart.Position)
+        if OnScreen then
+            local TopPos = Camera:WorldToViewportPoint(RootPart.Position + Vector3.new(0, 3, 0))
+            local BottomPos = Camera:WorldToViewportPoint(RootPart.Position - Vector3.new(0, 3.5, 0))
+            local SizeY = math.abs(TopPos.Y - BottomPos.Y)
+            local SizeX = math.abs(SizeY / 2)
+            local BoxPos = Vector2.new(Pos.X - SizeX / 2, Pos.Y - SizeY / 2)
+            Objects.Box.Visible = Settings.Box
+            Objects.Box.Size = Vector2.new(SizeX, SizeY); Objects.Box.Position = BoxPos
+            Objects.Tracer.Visible = Settings.Line
+            Objects.Tracer.From = Vector2.new(Camera.ViewportSize.X / 2, 0); Objects.Tracer.To = Vector2.new(Pos.X, BoxPos.Y)
+            Objects.HealthBar.Visible = Settings.Health
+            local hum = player.Character:FindFirstChild("Humanoid")
+            if hum then
+                local hPct = hum.Health / hum.MaxHealth
+                Objects.HealthBar.From = Vector2.new(BoxPos.X - 5, BoxPos.Y + SizeY)
+                Objects.HealthBar.To = Vector2.new(BoxPos.X - 5, BoxPos.Y + SizeY - (SizeY * hPct))
+                Objects.HealthBar.Color = Color3.fromHSV(hPct * 0.3, 1, 1)
+            end
+            Objects.NameTag.Visible = Settings.Name
+            local dist = math.floor((LocalPlayer.Character.HumanoidRootPart.Position - RootPart.Position).Magnitude)
+            Objects.NameTag.Text = player.Name .. " [" .. dist .. "m]"
+            Objects.NameTag.Position = Vector2.new(Pos.X, BoxPos.Y - 20)
+            Objects.TeleBtn.Visible = Settings.Teleport
+            Objects.TeleBtn.Position = Vector2.new(Pos.X, BoxPos.Y - 40)
+            if Settings.Teleport and UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then
+                if (UserInputService:GetMouseLocation() - Objects.TeleBtn.Position).Magnitude < 30 then
+                    LocalPlayer.Character.HumanoidRootPart.CFrame = RootPart.CFrame * CFrame.new(0, 0, 3)
+                end
+            end
+        else
+            for _, obj in pairs(Objects) do obj.Visible = false end
+        end
+    end)
+end
+
+for _, p in pairs(Players:GetPlayers()) do if p ~= LocalPlayer then CreateESP(p) end end
+Players.PlayerAdded:Connect(function(p) if p ~= LocalPlayer then CreateESP(p) end end)
+
+-- [ GIAO DIỆN CHÍNH ]
+local MinimizedFrame = Instance.new("TextButton")
+MinimizedFrame.Size = UDim2.new(0, 50, 0, 50); MinimizedFrame.Position = UDim2.new(0.05, 0, 0.2, 0)
+MinimizedFrame.BackgroundColor3 = Color3.fromRGB(30, 35, 60); MinimizedFrame.Text = "DT"
+MinimizedFrame.TextSize = 30; MinimizedFrame.Visible = false; MinimizedFrame.Active = true
+MinimizedFrame.Draggable = true; MinimizedFrame.Parent = ScreenGui
+Instance.new("UICorner", MinimizedFrame).CornerRadius = UDim.new(0, 10)
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Size = UDim2.new(0, 580, 0, 420); MainFrame.Position = UDim2.new(0.5, -290, 0.5, -210)
+MainFrame.BackgroundColor3 = Color3.fromRGB(20, 24, 45); MainFrame.Active = true
+MainFrame.Draggable = true; MainFrame.Parent = ScreenGui
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 10)
+
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size = UDim2.new(0, 30, 0, 30); CloseBtn.Position = UDim2.new(1, -40, 0, 10)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50); CloseBtn.Text = "X"
+CloseBtn.TextColor3 = Color3.new(1, 1, 1); CloseBtn.Parent = MainFrame
+Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(1, 0)
+
+local MiniBtn = Instance.new("TextButton")
+MiniBtn.Size = UDim2.new(0, 30, 0, 30); MiniBtn.Position = UDim2.new(1, -75, 0, 10)
+MiniBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80); MiniBtn.Text = "-"
+MiniBtn.TextColor3 = Color3.new(1, 1, 1); MiniBtn.TextSize = 20; MiniBtn.Parent = MainFrame
+Instance.new("UICorner", MiniBtn).CornerRadius = UDim.new(1, 0)
+
+local TabHolder = Instance.new("Frame")
+TabHolder.Size = UDim2.new(0, 450, 0, 40); TabHolder.Position = UDim2.new(0, 15, 0, 5)
+TabHolder.BackgroundTransparency = 1; TabHolder.Parent = MainFrame
+
+local function CreateTab(name, x)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0, 95, 0, 30); btn.Position = UDim2.new(0, x, 0.5, -15)
+    btn.BackgroundColor3 = Color3.fromRGB(35, 40, 70); btn.Text = name
+    btn.TextColor3 = Color3.new(0.6, 0.6, 0.6); btn.Font = Enum.Font.GothamBold; btn.Parent = TabHolder
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+    return btn
+end
+
+local TabTP = CreateTab("TELEPORT", 0)
+local TabFollow = CreateTab("FOLLOW", 105)
+local TabESP = CreateTab("ESP", 210)
+local TabMisc = CreateTab("KHÁC", 315)
+
+local TPPage = Instance.new("Frame")
+TPPage.Size = UDim2.new(1,0,1,-50); TPPage.Position = UDim2.new(0,0,0,50); TPPage.BackgroundTransparency = 1; TPPage.Parent = MainFrame
+
+local FollowPage = Instance.new("Frame")
+FollowPage.Size = UDim2.new(1,0,1,-50); FollowPage.Position = UDim2.new(0,0,0,50); FollowPage.BackgroundTransparency = 1; FollowPage.Visible = false; FollowPage.Parent = MainFrame
+
+local ESPPage = Instance.new("Frame")
+ESPPage.Size = UDim2.new(1,0,1,-50); ESPPage.Position = UDim2.new(0,0,0,50); ESPPage.BackgroundTransparency = 1; ESPPage.Visible = false; ESPPage.Parent = MainFrame
+
+local MiscPage = Instance.new("Frame")
+MiscPage.Size = UDim2.new(1,0,1,-50); MiscPage.Position = UDim2.new(0,0,0,50); MiscPage.BackgroundTransparency = 1; MiscPage.Visible = false; MiscPage.Parent = MainFrame
+
+local function OpenTab(page, btn)
+    TPPage.Visible = false; FollowPage.Visible = false; ESPPage.Visible = false; MiscPage.Visible = false
+    TabTP.TextColor3 = Color3.new(0.6,0.6,0.6); TabFollow.TextColor3 = Color3.new(0.6,0.6,0.6)
+    TabESP.TextColor3 = Color3.new(0.6,0.6,0.6); TabMisc.TextColor3 = Color3.new(0.6,0.6,0.6)
+    page.Visible = true; btn.TextColor3 = Color3.new(1,1,1)
+end
+
+TabTP.MouseButton1Click:Connect(function() OpenTab(TPPage, TabTP) end)
+TabFollow.MouseButton1Click:Connect(function() OpenTab(FollowPage, TabFollow) end)
+TabESP.MouseButton1Click:Connect(function() OpenTab(ESPPage, TabESP) end)
+TabMisc.MouseButton1Click:Connect(function() OpenTab(MiscPage, TabMisc) end)
+
+-- [ TRANG TELEPORT - GIỮ NGUYÊN ]
+local StatusLine = Instance.new("TextLabel")
+StatusLine.Size = UDim2.new(1,-30,0,30); StatusLine.Position = UDim2.new(0,15,0,5)
+StatusLine.BackgroundColor3 = Color3.fromRGB(120,60,180); StatusLine.Text = "✓ AUTO RESPAWN ON"
+StatusLine.TextColor3 = Color3.new(1,1,1); StatusLine.Font = Enum.Font.GothamBold; StatusLine.Parent = TPPage
+Instance.new("UICorner", StatusLine)
+
+local LeftScroll = Instance.new("ScrollingFrame")
+LeftScroll.Size = UDim2.new(0,270,0,280); LeftScroll.Position = UDim2.new(0,15,0,50)
+LeftScroll.BackgroundTransparency = 1; LeftScroll.Parent = TPPage
+Instance.new("UIListLayout", LeftScroll).Padding = UDim.new(0,5)
+
+local RightSide = Instance.new("Frame")
+RightSide.Size = UDim2.new(0,250,0,240); RightSide.Position = UDim2.new(0,305,0,50)
+RightSide.BackgroundTransparency = 1; RightSide.Parent = TPPage
+
+local PosDisplay = Instance.new("TextLabel")
+PosDisplay.Size = UDim2.new(1,0,0,20); PosDisplay.Text = "X:0 Y:0 Z:0"
+PosDisplay.TextColor3 = Color3.fromRGB(150,150,150); PosDisplay.BackgroundTransparency = 1; PosDisplay.Parent = RightSide
+
+local function ActionBtn(txt, color, y, parent)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(1,0,0,38); b.Position = UDim2.new(0,0,0,y)
+    b.BackgroundColor3 = color; b.Text = txt; b.TextColor3 = Color3.new(1,1,1)
+    b.Font = Enum.Font.GothamBold; b.Parent = parent
+    Instance.new("UICorner", b); return b
+end
+
+local CopyBtn = ActionBtn("COPY POSITION", Color3.fromRGB(40,120,200), 30, RightSide)
+local SaveBtn = ActionBtn("SAVE CHECKPOINT", Color3.fromRGB(30,150,100), 80, RightSide)
+local DelAll = ActionBtn("DELETE ALL", Color3.fromRGB(220,50,50), 330, TPPage)
+DelAll.Size = UDim2.new(0,250,0,40); DelAll.Position = UDim2.new(0,305,0,330)
+
+-- [ TRANG ESP - GIỮ NGUYÊN ]
+local EspLayout = Instance.new("UIListLayout", ESPPage)
+EspLayout.Padding = UDim.new(0,10); EspLayout.HorizontalAlignment = "Center"; EspLayout.VerticalAlignment = "Center"
+
+local function AddEspToggle(text, prop)
+    local btn = Instance.new("TextButton", ESPPage)
+    btn.Size = UDim2.new(0,380,0,45); btn.BackgroundColor3 = Color3.fromRGB(35,40,70)
+    btn.Text = text .. ": OFF"; btn.TextColor3 = Color3.new(1,1,1); btn.Font = Enum.Font.GothamBold
+    Instance.new("UICorner", btn)
+    btn.MouseButton1Click:Connect(function()
+        Settings[prop] = not Settings[prop]
+        btn.Text = text .. ": " .. (Settings[prop] and "ON" or "OFF")
+        btn.TextColor3 = Settings[prop] and Color3.new(0,1,0) or Color3.new(1,1,1)
+    end)
+end
+AddEspToggle("Box ESP", "Box"); AddEspToggle("Line (Top)", "Line")
+AddEspToggle("Health Bar", "Health"); AddEspToggle("Name & Dist", "Name"); AddEspToggle("Teleport Btn", "Teleport")
+
+-- [ TRANG FOLLOW - GIỮ NGUYÊN ]
+local PlayerScroll = Instance.new("ScrollingFrame")
+PlayerScroll.Size = UDim2.new(0,270,0,330); PlayerScroll.Position = UDim2.new(0,15,0,10)
+PlayerScroll.BackgroundColor3 = Color3.fromRGB(25,25,40); PlayerScroll.Parent = FollowPage
+Instance.new("UIListLayout", PlayerScroll)
+
+local DistInput = Instance.new("TextBox")
+DistInput.Size = UDim2.new(0,250,0,40); DistInput.Position = UDim2.new(0,305,0,40)
+DistInput.BackgroundColor3 = Color3.fromRGB(40,45,70); DistInput.Text = "7"
+DistInput.TextColor3 = Color3.new(1,1,1); DistInput.PlaceholderText = "Distance..."; DistInput.Parent = FollowPage
+Instance.new("UICorner", DistInput)
+
+local FollowBtn = ActionBtn("START FOLLOW", Color3.fromRGB(0,150,100), 90, FollowPage)
+FollowBtn.Size = UDim2.new(0,250,0,50); FollowBtn.Position = UDim2.new(0,305,0,95)
+
+-- [ TRANG KHÁC - THÊM BRING PARTS VÀO ĐÂY ]
+local MiscScroll = Instance.new("ScrollingFrame", MiscPage)
+MiscScroll.Size = UDim2.new(1, 0, 1, 0); MiscScroll.BackgroundTransparency = 1; MiscScroll.CanvasSize = UDim2.new(0,0,1.5,0)
+local MiscList = Instance.new("UIListLayout", MiscScroll)
+MiscList.Padding = UDim.new(0, 10); MiscList.HorizontalAlignment = "Center"
+
+-- Phần Bring Parts (Mới thêm)
+local BringTitle = Instance.new("TextLabel", MiscScroll)
+BringTitle.Size = UDim2.new(0.9, 0, 0, 30); BringTitle.Text = "BRING PARTS SYSTEM"; BringTitle.TextColor3 = Color3.new(1,1,1); BringTitle.BackgroundTransparency = 1
+
+local BringBox = Instance.new("TextBox", MiscScroll)
+BringBox.Size = UDim2.new(0.85, 0, 0, 40); BringBox.BackgroundColor3 = Color3.fromRGB(45, 45, 50); BringBox.PlaceholderText = "Nhập tên Player để mang đồ tới..."
+BringBox.Text = ""; BringBox.TextColor3 = Color3.new(1,1,1); Instance.new("UICorner", BringBox)
+
+local BringBtn = Instance.new("TextButton", MiscScroll)
+BringBtn.Size = UDim2.new(0.85, 0, 0, 40); BringBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 215); BringBtn.Text = "Bring Parts | Off"
+BringBtn.TextColor3 = Color3.new(1,1,1); BringBtn.Font = Enum.Font.GothamBold; Instance.new("UICorner", BringBtn)
+
+-- Các nút cũ (Fling, Float, Fly)
+local FlingBtn = ActionBtn("ACTIVATE FLING", Color3.fromRGB(200, 80, 0), 0, MiscScroll)
+FlingBtn.Size = UDim2.new(0.85, 0, 0, 45)
+local FloatBtn = ActionBtn("ACTIVATE FLOAT", Color3.fromRGB(0, 120, 200), 0, MiscScroll)
+FloatBtn.Size = UDim2.new(0.85, 0, 0, 45)
+local FlyBtn = ActionBtn("✈ ACTIVATE FLY", Color3.fromRGB(50, 100, 200), 0, MiscScroll)
+FlyBtn.Size = UDim2.new(0.85, 0, 0, 45)
+
+-- [ LOGIC HỆ THỐNG ]
+
+-- Logic Teleport
+local function updateTP()
+    for _, v in pairs(LeftScroll:GetChildren()) do if v:IsA("Frame") then v:Destroy() end end
+    for i, cf in ipairs(checkpoints) do
+        local f = Instance.new("Frame"); f.Size = UDim2.new(1,-10,0,40); f.BackgroundColor3 = Color3.fromRGB(35,40,70); f.Parent = LeftScroll
+        Instance.new("UICorner", f)
+        local t = Instance.new("TextLabel"); t.Text = "Point "..i; t.Size = UDim2.new(0.6,0,1,0); t.TextColor3 = Color3.new(1,1,1); t.BackgroundTransparency = 1; t.Parent = f
+        local s = Instance.new("TextButton"); s.Text = "TP"; s.Size = UDim2.new(0,50,0,30); s.Position = UDim2.new(1,-60,0,5); s.BackgroundColor3 = Color3.fromRGB(60,100,200); s.TextColor3 = Color3.new(1,1,1); s.Parent = f
+        Instance.new("UICorner", s)
+        s.MouseButton1Click:Connect(function() if LocalPlayer.Character then LocalPlayer.Character:SetPrimaryPartCFrame(cf) end end)
+    end
+end
+SaveBtn.MouseButton1Click:Connect(function() local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") if root then lastSavedPos = root.CFrame; table.insert(checkpoints, lastSavedPos); updateTP() end end)
+CopyBtn.MouseButton1Click:Connect(function() local root = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") if root then setclipboard(tostring(root.Position)) end end)
+DelAll.MouseButton1Click:Connect(function() checkpoints = {}; updateTP() end)
+
+-- Logic Follow
+local function updatePlayers()
+    for _, v in pairs(PlayerScroll:GetChildren()) do if v:IsA("TextButton") then v:Destroy() end end
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer then
+            local b = Instance.new("TextButton"); b.Size = UDim2.new(1,0,0,35); b.Text = p.DisplayName
+            b.BackgroundColor3 = (targetPlayer == p) and Color3.fromRGB(80,100,255) or Color3.fromRGB(35,40,60)
+            b.TextColor3 = Color3.new(1,1,1); b.Parent = PlayerScroll
+            b.MouseButton1Click:Connect(function() targetPlayer = p; updatePlayers() end)
+        end
+    end
+end
+Players.PlayerAdded:Connect(updatePlayers); Players.PlayerRemoving:Connect(updatePlayers); updatePlayers()
+FollowBtn.MouseButton1Click:Connect(function() if not targetPlayer then return end isFollowing = not isFollowing; FollowBtn.Text = isFollowing and "STOP FOLLOW" or "START FOLLOW"; FollowBtn.BackgroundColor3 = isFollowing and Color3.fromRGB(200,60,60) or Color3.fromRGB(0,150,100) end)
+
+-- Logic Bring Parts (Mới)
+local function getPlayer(name)
+    local lowerName = string.lower(name)
+    for _, p in pairs(Players:GetPlayers()) do
+        if string.find(string.lower(p.Name), lowerName) or string.find(string.lower(p.DisplayName), lowerName) then return p end
+    end
+    return nil
+end
+
+BringBtn.MouseButton1Click:Connect(function()
+    bringTarget = getPlayer(BringBox.Text)
+    if not bringTarget then return end
+    blackHoleActive = not blackHoleActive
+    if blackHoleActive then
+        BringBtn.Text = "Bring Parts | On"; BringBtn.BackgroundColor3 = Color3.fromRGB(0, 180, 0)
+        for _, v in ipairs(Workspace:GetDescendants()) do ForcePart(v) end
+        DescendantAddedConnection = Workspace.DescendantAdded:Connect(function(v) if blackHoleActive then ForcePart(v) end end)
+    else
+        BringBtn.Text = "Bring Parts | Off"; BringBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 215)
+        if DescendantAddedConnection then DescendantAddedConnection:Disconnect() end
+    end
+end)
+
+-- Render Loop chính
+RunService.Heartbeat:Connect(function()
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if root then
+        PosDisplay.Text = string.format("X:%.0f Y:%.0f Z:%.0f", root.Position.X, root.Position.Y, root.Position.Z)
+        
+        -- Follow Logic
+        if isFollowing and targetPlayer and targetPlayer.Character then
+            local tRoot = targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+            if tRoot then
+                for _, v in pairs(char:GetDescendants()) do if v:IsA("BasePart") then v.CanCollide = false end end
+                local dist = tonumber(DistInput.Text) or 7
+                local tPos = (tRoot.CFrame * CFrame.new(0, 1.5, dist)).Position
+                root.CFrame = CFrame.lookAt(tPos, Vector3.new(tRoot.Position.X, tPos.Y, tRoot.Position.Z))
+                root.Velocity = Vector3.new(0,0,0)
+            end
+        end
+
+        -- Bring Parts Logic
+        if blackHoleActive and bringTarget and bringTarget.Character then
+            local tRoot = bringTarget.Character:FindFirstChild("HumanoidRootPart")
+            if tRoot then Attachment1.WorldCFrame = tRoot.CFrame end
+        end
+    end
+end)
+
+-- Script ngoại vi
+FlingBtn.MouseButton1Click:Connect(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/0Ben1/fe./main/Fling%20GUI"))() end)
+FloatBtn.MouseButton1Click:Connect(function() loadstring(game:HttpGet('https://raw.githubusercontent.com/GhostPlayer352/Test4/main/Float'))() end)
+FlyBtn.MouseButton1Click:Connect(function() loadstring(game:HttpGet("https://raw.githubusercontent.com/XNEOFF/FlyGuiV3/main/FlyGuiV3.txt"))() end)
+
+-- UI Toggle
+MiniBtn.MouseButton1Click:Connect(function() MainFrame.Visible = false; MinimizedFrame.Visible = true end)
+MinimizedFrame.MouseButton1Click:Connect(function() MainFrame.Visible = true; MinimizedFrame.Visible = false end)
+CloseBtn.MouseButton1Click:Connect(function() ScreenGui:Destroy() end)
+UserInputService.InputBegan:Connect(function(i, g) if not g and i.KeyCode == Enum.KeyCode.RightControl then MainFrame.Visible = not MainFrame.Visible end end)
